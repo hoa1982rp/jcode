@@ -229,6 +229,73 @@ struct ResponseSseEvent {
     error: Option<Value>,
 }
 
+#[derive(Deserialize, Debug)]
+struct ChatCompletionChunk {
+    id: Option<String>,
+    object: String,
+    created: u64,
+    model: String,
+    choices: Vec<Choice>,
+    usage: Option<Usage>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Choice {
+    index: u64,
+    delta: Delta,
+    logprobs: Option<Value>,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Delta {
+    #[serde(default)]
+    role: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    reasoning_content: String,
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ToolCall {
+    index: u64,
+    id: Option<String>,
+    #[serde(default)]
+    r#type: String,
+    function: Function,
+}
+
+#[derive(Deserialize, Debug)]
+struct Function {
+    name: Option<String>,
+    arguments: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct Usage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: PromptTokensDetails,
+    #[serde(default)]
+    completion_tokens_details: CompletionTokensDetails,
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct PromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u64,
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct CompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StreamingToolCallState {
     call_id: Option<String>,
@@ -315,6 +382,20 @@ pub fn parse_openai_response_event(
             message: data.to_string(),
             retry_after_secs: None,
         });
+    }
+
+    // Try to parse as OpenAI Chat Completions chunk format first
+    if let Ok(chat_chunk) = serde_json::from_str::<ChatCompletionChunk>(data) {
+        if let Some(usage) = chat_chunk.usage {
+            return Some(StreamEvent::TokenUsage {
+                input_tokens: Some(usage.prompt_tokens as u64),
+                output_tokens: Some(usage.completion_tokens as u64),
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+            });
+        }
+        // For non-usage chunks, return None to continue processing
+        // Actual content will be handled by theResponses API parsing below
     }
 
     let event: ResponseSseEvent = match serde_json::from_str(data) {
